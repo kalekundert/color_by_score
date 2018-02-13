@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import division
+
 import os, sys
 from pymol import cmd
 from pymol.wizard import Wizard
@@ -16,6 +18,7 @@ class ColorByScore (Wizard):
         self.active_prompt = ''
         self.is_rosetta_running = False
         self.active_term = 'total'
+        self.tempdir = None
         self.indices = {}
         self.scores = {}
         self.terms = {}
@@ -143,6 +146,9 @@ class ColorByScore (Wizard):
     def cleanup(self):
         if self.obj:
             self._restore_colors()
+        if self.tempdir:
+            import shutil
+            shutil.rmtree(self.tempdir)
         cmd.set_wizard()
 
     def _save_colors(self):
@@ -162,9 +168,9 @@ class ColorByScore (Wizard):
             return
 
         # Create a temporary directory.
-        tempdir = mkdtemp(prefix='color_by_score_')
-        pdb_path = os.path.join(tempdir, 'pymol_obj.pdb')
-        score_path = os.path.join(tempdir, 'default.sc')
+        self.tempdir = mkdtemp(prefix='color_by_score_')
+        pdb_path = os.path.join(self.tempdir, 'pymol_obj.pdb')
+        score_path = os.path.join(self.tempdir, 'default.sc')
 
         # Create a PDB from the indicated object.
         cmd.save(pdb_path, self.obj)
@@ -182,11 +188,12 @@ class ColorByScore (Wizard):
                 score_app,
                 '-in:file:s', pdb_path,
                 '-rescore:verbose',
+                '-ignore_unrecognized_res',
         ] +     self.rosetta_args
 
         self.is_rosetta_running = True
         cmd.refresh_wizard()
-        p = Popen(score_cmd, stdout=PIPE, stderr=PIPE, cwd=tempdir)
+        p = Popen(score_cmd, stdout=PIPE, stderr=PIPE, cwd=self.tempdir)
         stdout, stderr = p.communicate()
         self.is_rosetta_running = False
 
@@ -196,27 +203,21 @@ class ColorByScore (Wizard):
         print(stdout)
         print(stderr)
 
-        rmtree(tempdir)
+        print("""\
+All files used to score '{}' will be kept until the wizard is closed:
+{}""".format(self.obj, self.tempdir))
+
+        with open(os.path.join(self.tempdir, 'stdout'), 'w') as file:
+            file.write(stdout)
 
         # Scrape the score terms from rosetta's output log.
-        self.scores = {}
-        self.terms = {'total': 0}
+        self.terms, self.scores = parse_scores(stdout)
 
-        for line in stdout.split('\n'):
-            if line.startswith('protocols.simple_moves.ScoreMover: E   '):
-                fields = line.split()
-                self.terms.update({x: i for i, x in enumerate(fields[2:], 1)})
-
-            if line.startswith('protocols.simple_moves.ScoreMover: E(i)'):
-                fields = line.split()
-                resi = int(fields[2])
-                terms = [float(x) for x in fields[3:]]
-                self.scores[resi] = [sum(terms)] + terms
-        
         # Re-color the protein.
         self._update_colors()
 
     def _update_colors(self):
+        pprint(self.terms)
         active_scores = {
                 resi: self.scores[resi][self.terms[self.active_term]]
                 for resi in self.scores
@@ -227,6 +228,7 @@ class ColorByScore (Wizard):
                 lo=min(active_scores.values()),
                 hi=max(active_scores.values()),
                 c=colorscheme):
+            if hi == lo: return len(c) // 2
             return int(len(c) * (hi - x) / (hi - lo)) + c[0]
 
         colors = {
@@ -235,11 +237,12 @@ class ColorByScore (Wizard):
         }
 
         cmd.alter(
-                self.obj,
+                '{} and elem C'.format(self.obj),
                 'color = colors[self.indices[chain, resi, name]]',
                 space=locals(),
         )
         cmd.recolor()
+        cmd.refresh_wizard()
         
     def _restore_colors(self):
         if self.obj:
@@ -251,13 +254,56 @@ class ColorByScore (Wizard):
             cmd.recolor()
 
 
-
 def color_by_score(obj=None, ref_obj=None):
     """
     Provide a convenient way to launch the wizard from the command-line.
     """
     wizard = ColorByScore(obj, ref_obj)
     cmd.set_wizard(wizard)
+
+
+def run_score_app():
+    pass
+
+def parse_scores(rosetta_stdout):
+    scores = {}
+    terms = {'total': 0}
+    weights = []
+
+    # Parse the names of the score terms from the "human readable" table at the 
+    # end of the file.  At first I got the names from the header of the table 
+    # with all the residue scores (parsed below), but the headers don't 
+    # necessarily have any space between them, which makes them very difficult 
+    # to parse.  This table is also kinda hard to parse, but it has the weights 
+    # and its not ambiguous.
+
+    n = None
+    for line in rosetta_stdout.split('\n'):
+        if n is not None:
+            n += 1
+            if n >= 0:
+                if line.startswith('---------------'):
+                    n = None
+                    continue
+
+                fields = line.split()
+                terms[fields[0]] = n + 1
+                weights.append(float(fields[1]))
+                
+        if line.startswith(' Scores                       Weight   Raw Score Wghtd.Score'):
+            n = -2
+    
+    # Parse the scores for each residue.
+
+    for line in rosetta_stdout.split('\n'):
+        if line.startswith('protocols.simple_moves.ScoreMover: E(i)'):
+            fields = line.split()
+            resi = int(fields[2])
+            values = [float(x) for x in fields[3:]]
+            total = sum(w*x for w,x in zip(weights, values))
+            scores[resi] = [sum(values)] + values
+    
+    return terms, scores
 
 
 ## Add "score" as pymol command
