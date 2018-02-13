@@ -81,12 +81,16 @@ class ColorByScore (Wizard):
         self.rosetta_args = []
         self.active_prompt = ''
         self.is_rosetta_running = False
-        self.palette = palette or 'blue_white_red'
+        self.compare_to_ref = True
         self.active_term = term or 'total'
+        self.active_palette = palette or 'blue_white_red'
         self.tempdir = None
-        self.indices = {}
+        self.error = None
+        self.index_map = {}
         self.scores = {}
+        self.ref_scores = {}
         self.terms = {}
+        self.ref_terms = {}
 
         self.set_selection(sele)
 
@@ -117,14 +121,31 @@ class ColorByScore (Wizard):
                 [2, "Cancel", 'cmd.get_wizard().cleanup()'],
             ]
 
+        if self.error:
+            from textwrap import wrap
+            return [
+                [1, "Color by Score", ''],
+            ] + [
+                [1, '\\900' + x, '']
+                for x in wrap(self.error, 26)
+            ] + [
+                [2, "Cancel", 'cmd.get_wizard().cleanup()'],
+            ]
+
         # Make the buttons and menus that control the basic actions and 
         # settings that don't depend on the specific system being studied.
 
         buttons = [
             [1, "Color by Score", ''],
             [3, "Term: {}".format(self.active_term), 'term'],
-            [3, "Colors: {}".format(self.palette), 'palette'],
+            [3, "Colors: {}".format(self.active_palette), 'palette'],
+        ]
 
+        if self.ref_sele:
+            buttons += [
+            [3, "Show: {}".format('delta-score' if self.compare_to_ref else 'score'), 'delta']]
+
+        buttons += [
             [2, "Done", 'cmd.get_wizard().cleanup()'],
         ]
 
@@ -139,17 +160,24 @@ class ColorByScore (Wizard):
         menus = {
             'term': [[2, 'Score Term', '']],
             'palette': [[2, 'Colorsheme', '']],
+            'delta': [[2, 'Show:', '']],
         }
 
         # Define the term menu.
         for term in sorted(self.terms, key=self.terms.__getitem__):
             menus['term'] += [[
-                1, term, 'cmd.get_wizard().set_active_term("{}")'.format(term)]]
+                1, term, 'cmd.get_wizard().set_term("{}")'.format(term)]]
 
         # Define the palette menu.
         for palette in sorted(palettes):
             menus['palette'] += [[
                 1, palette, 'cmd.get_wizard().set_palette("{}")'.format(palette)]]
+
+        # Define the difference menu.
+        menus['delta'] += [
+                [1, 'delta-score', 'cmd.get_wizard().set_compare_to_ref(True)'],
+                [1, 'score', 'cmd.get_wizard().set_compare_to_ref(False)'],
+        ]
 
         # Return the right menu.
         return menus[tag]
@@ -203,6 +231,10 @@ class ColorByScore (Wizard):
         self._save_colors()
         self._update_score()
 
+    def set_reference(self, sele):
+        self.ref_sele = sele
+        self._update_score()
+
     def set_rosetta_path(self, path):
         self.rosetta_path = path
         self._update_score()
@@ -211,13 +243,21 @@ class ColorByScore (Wizard):
         self.rosetta_args = args
         self._update_score()
 
-    def set_active_term(self, term):
+    def set_term(self, term):
         self.active_term = term
         self._update_colors()
 
     def set_palette(self, palette):
-        self.palette = palette
+        self.active_palette = palette
         self._update_colors()
+
+    def set_compare_to_ref(self, bool):
+        self.compare_to_ref = bool
+        self._update_colors()
+
+    def set_error(self, message, *args, **kwargs):
+        self.error = message.format(*args, **kwargs)
+        cmd.refresh_wizard()
 
     def cleanup(self):
         if self.sele:
@@ -237,70 +277,78 @@ class ColorByScore (Wizard):
 
     def _update_score(self):
         from tempfile import mkdtemp
-        from subprocess import Popen, PIPE
-        from shutil import rmtree
 
         if not self.sele and self.rosetta_path:
             return
 
-        # Create a temporary directory.
         self.tempdir = mkdtemp(prefix='color_by_score_')
-        pdb_path = os.path.join(self.tempdir, 'pymol_sele.pdb')
-        score_path = os.path.join(self.tempdir, 'default.sc')
 
-        # Create a PDB from the indicated selection.
-        cmd.save(pdb_path, self.sele)
+        # Calculate scores for the primary selection and, if it exists, the 
+        # reference selection.
 
-        self.indices = {}
-        cmd.iterate(
-                self.sele,
-                'residues.add(resi); self.indices[chain, resi, name] = len(residues)',
-                space=dict(self=self, residues=set(), len=len),
-        )
+        keys = ['sele'] if not self.ref_sele else ['sele', 'ref']
+        seles = {
+                'sele': self.sele,
+                'ref':  self.ref_sele,
+        }
+        terms = {}
+        scores = {}
+        index_maps = {}
 
-        # Score the PDB with rosetta.
-        score_app = os.path.join(self.rosetta_path, 'source', 'bin', 'score')
-        score_cmd = [
-                score_app,
-                '-in:file:s', pdb_path,
-                '-rescore:verbose',
-                '-ignore_unrecognized_res',
-        ] +     self.rosetta_args
+        for k in keys:
+            pdb_path = os.path.join(self.tempdir, k + '.pdb')
+            log_prefix = os.path.join(self.tempdir, k)
 
-        self.is_rosetta_running = True
-        cmd.refresh_wizard()
-        p = Popen(score_cmd, stdout=PIPE, stderr=PIPE, cwd=self.tempdir)
-        stdout, stderr = p.communicate()
-        self.is_rosetta_running = False
+            index_maps[k] = pdb_from_sele(seles[k], pdb_path)
+            stdout, stderr = run_score_app(
+                    self.tempdir,
+                    self.rosetta_path,
+                    pdb_path,
+                    log_prefix,
+            )
+            print stdout, stderr
+            
+            terms[k], scores[k] = parse_scores(stdout)
 
-        stdout = stdout.decode('utf-8')
-        stderr = stderr.decode('utf-8')
-
-        print(stdout)
-        print(stderr)
-
-        print("""\
+        print """\
 All files used to score '{}' will be kept until the wizard is closed:
-{}""".format(self.sele, self.tempdir))
+{}""".format(self.sele, self.tempdir)
 
-        with open(os.path.join(self.tempdir, 'stdout'), 'w') as file:
-            file.write(stdout)
+        # Extract the information that will be needed to color the structure 
+        # into member variables.
 
-        # Scrape the score terms from rosetta's output log.
-        self.terms, self.scores = parse_scores(stdout)
+        if self.ref_sele:
+            if len(scores['sele']) != len(scores['ref']):
+                self.set_error("Cannot compare '{}' and '{}' because they have different numbers of residues ({} and {}).", self.sele, self.ref_sele, len(scores['sele']), len(scores['ref']))
+                return
+
+        self.index_map = index_maps['sele']
+        self.terms = terms['sele']
+        self.scores = scores['sele']
+        self.ref_terms = terms['ref'] if self.ref_sele else None
+        self.ref_scores = scores['ref'] if self.ref_sele else None
 
         # Re-color the protein.
         self._update_colors()
 
     def _update_colors(self):
+
+        def score_from_resi(resi): #
+            term = self.terms[self.active_term]
+            score = self.scores[resi][term]
+            if self.ref_sele and self.compare_to_ref:
+                score -= self.ref_scores[resi][term]
+            return score
+
         active_scores = {
-                resi: self.scores[resi][self.terms[self.active_term]]
+                resi: score_from_resi(resi)
                 for resi in self.scores
         }
+
         def color_from_score(x, #
                 lo=min(active_scores.values()),
                 hi=max(active_scores.values()),
-                c=palettes[self.palette]):
+                c=palettes[self.active_palette]):
             if hi == lo:
                 i = len(c) / 2
             else:
@@ -313,7 +361,7 @@ All files used to score '{}' will be kept until the wizard is closed:
         }
         cmd.alter(
                 '{} and elem C'.format(self.sele),
-                'color = colors[self.indices[chain, resi, name]]',
+                'color = colors[self.index_map[chain, resi, name]]',
                 space=locals(),
         )
         cmd.recolor()
@@ -337,8 +385,39 @@ def color_by_score(sele=None, ref_sele=None, palette=None, term=None):
     cmd.set_wizard(wizard)
 
 
-def run_score_app():
-    pass
+def pdb_from_sele(sele, pdb_path):
+    cmd.save(pdb_path, sele)
+
+    # Create a mapping between the rosetta (i.e. sequential) residue numbers 
+    # and the chain names/residue ids in the selection.
+    index_map = {}
+    cmd.iterate(
+            sele,
+            'residues.add(resi); index_map[chain, resi, name] = len(residues)',
+            space=dict(index_map=index_map, residues=set(), len=len),
+    )
+    return index_map
+
+def run_score_app(tempdir, rosetta_path, pdb_path, log_prefix):
+    from subprocess import Popen, PIPE
+
+    score_app = os.path.join(rosetta_path, 'source', 'bin', 'score')
+    score_cmd = [
+            score_app,
+            '-in:file:s', pdb_path,
+            '-rescore:verbose',
+            '-ignore_unrecognized_res',
+    ]
+
+    p = Popen(score_cmd, stdout=PIPE, stderr=PIPE, cwd=tempdir)
+    stdout, stderr = [x.decode('utf-8') for x in p.communicate()]
+
+    with open(log_prefix + '.stdout', 'w') as file:
+        file.write(stdout)
+    with open(log_prefix + '.stderr', 'w') as file:
+        file.write(stderr)
+
+    return stdout, stderr
 
 def parse_scores(rosetta_stdout):
     scores = {}
