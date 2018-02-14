@@ -198,6 +198,21 @@ class ColorByScore (Wizard):
         else:
             return
 
+    def get_event_mask(self):
+        return sum([
+            Wizard.event_mask_key,
+            #Wizard.event_mask_pick,
+            #Wizard.event_mask_select,
+            #Wizard.event_mask_key,
+            #Wizard.event_mask_special,
+            #Wizard.event_mask_scene,
+            #Wizard.event_mask_state,
+            #Wizard.event_mask_frame,
+            #Wizard.event_mask_dirty,
+            #Wizard.event_mask_view,
+            #Wizard.event_mask_position,
+        ])
+
     def do_key(self, key, x, y, mod):
         """
         Take responsibility for handling key presses.
@@ -223,25 +238,22 @@ class ColorByScore (Wizard):
         cmd.refresh_wizard()
         return 1
 
-    def get_event_mask(self):
-        return Wizard.event_mask_key
-
     def set_selection(self, sele):
         self.sele = sele
         self._save_colors()
-        self._update_score()
+        self._update_scores()
 
     def set_reference(self, sele):
         self.ref_sele = sele
-        self._update_score()
+        self._update_scores()
 
     def set_rosetta_path(self, path):
         self.rosetta_path = path
-        self._update_score()
+        self._update_scores()
 
     def set_rosetta_args(self, *args):
         self.rosetta_args = args
-        self._update_score()
+        self._update_scores()
 
     def set_term(self, term):
         self.active_term = term
@@ -275,7 +287,7 @@ class ColorByScore (Wizard):
                     space=locals(),
             )
 
-    def _update_score(self):
+    def _update_scores(self):
         from tempfile import mkdtemp
 
         if not self.sele and self.rosetta_path:
@@ -291,23 +303,21 @@ class ColorByScore (Wizard):
                 'sele': self.sele,
                 'ref':  self.ref_sele,
         }
+        processes = {}
         terms = {}
         scores = {}
         index_maps = {}
 
         for k in keys:
             pdb_path = os.path.join(self.tempdir, k + '.pdb')
-            log_prefix = os.path.join(self.tempdir, k)
-
             index_maps[k] = pdb_from_sele(seles[k], pdb_path)
-            stdout, stderr = run_score_app(
-                    self.tempdir,
-                    self.rosetta_path,
-                    pdb_path,
-                    log_prefix,
-            )
+            processes[k] = launch_score_app(
+                    self.tempdir, self.rosetta_path, pdb_path)
+
+        for k in reversed(keys):
+            log_prefix = os.path.join(self.tempdir, k)
+            stdout, stderr = complete_score_app(processes[k], log_prefix)
             print stdout, stderr
-            
             terms[k], scores[k] = parse_scores(stdout)
 
         print """\
@@ -398,7 +408,7 @@ def pdb_from_sele(sele, pdb_path):
     )
     return index_map
 
-def run_score_app(tempdir, rosetta_path, pdb_path, log_prefix):
+def launch_score_app(tempdir, rosetta_path, pdb_path):
     from subprocess import Popen, PIPE
 
     score_app = os.path.join(rosetta_path, 'source', 'bin', 'score')
@@ -409,8 +419,10 @@ def run_score_app(tempdir, rosetta_path, pdb_path, log_prefix):
             '-ignore_unrecognized_res',
     ]
 
-    p = Popen(score_cmd, stdout=PIPE, stderr=PIPE, cwd=tempdir)
-    stdout, stderr = [x.decode('utf-8') for x in p.communicate()]
+    return Popen(score_cmd, stdout=PIPE, stderr=PIPE, cwd=tempdir)
+
+def complete_score_app(process, log_prefix):
+    stdout, stderr = [x.decode('utf-8') for x in process.communicate()]
 
     with open(log_prefix + '.stdout', 'w') as file:
         file.write(stdout)
