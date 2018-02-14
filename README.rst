@@ -13,14 +13,14 @@ Installation
 ------------
 1. Download and compile rosetta.
 
-2. Create an environment variable called `ROSETTA` that contains the path to 
+2. Create an environment variable called ``ROSETTA`` that contains the path to 
    the Rosetta installation you want Color By Score to use.  For example, if 
-   you checked out Rosetta in `~/rosetta` like so::
+   you checked out Rosetta in ``~/rosetta`` like so::
 
       git clone git@github.com:RosettaCommons/main.git ~/rosetta
 
-   The you would add the following line (or something like it) to your 
-   `~/.bashrc` file::
+   Then you would add the following line (or something like it) to your 
+   ``~/.bashrc`` file::
 
       export ROSETTA=~/rosetta
 
@@ -37,7 +37,7 @@ Displaying scores
 -----------------
 1. Load your model into PyMOL.
 
-2. Click Plugins > Color By Score or enter `score` in the PyMOL command line.  
+2. Click Plugins > Color By Score or enter ``score`` in the PyMOL command line.  
    Wait a few seconds while the rosetta scores are calculated, then the whole 
    scene will be recolored according to those scores.
 
@@ -52,9 +52,9 @@ Displaying scores
 
 4. If you want to change the color scheme being used, click on the "Colors" 
    menu on the right side of the screen.  Better scores will be represented by 
-   the left-most colors.  For example, the default colors are `blue_white_red`, 
-   meaning that residues with good scores will be colored blue, intermediate 
-   scores white, and bad scores red.
+   the left-most colors.  For example, the default colors are 
+   ``blue_white_red``, meaning that residues with good scores will be colored 
+   blue, intermediate scores white, and bad scores red.
 
    .. note::
       The scale is relative to the scores present in the structure, so there 
