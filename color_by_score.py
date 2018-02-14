@@ -73,9 +73,8 @@ palettes = {
 
 class ColorByScore (Wizard):
 
-    def __init__(self, sele='', ref_sele='', palette=None, term=None):
-        self.sele = None
-        self.ref_sele = ref_sele
+    def __init__(self, sele=None, ref_sele=None, palette=None, term=None):
+        self.ref_sele = ref_sele or ''
         self.original_colors = {}
         self.rosetta_path = os.environ.get('ROSETTA')
         self.rosetta_args = []
@@ -92,7 +91,7 @@ class ColorByScore (Wizard):
         self.terms = {}
         self.ref_terms = {}
 
-        self.set_selection(sele)
+        self.set_selection(sele or 'all')
 
     def get_panel(self):
         """
@@ -190,7 +189,7 @@ class ColorByScore (Wizard):
         """
         # The \999 code changes the text color to white.
         if not self.sele:
-            return ["Select the selection to score: \\999{}".format(self.active_prompt)]
+            return ["Provide a selection to score: \\999{}".format(self.active_prompt)]
         if not self.rosetta_path:
             return ["Provide the path to rosetta: \\999{}".format(self.active_prompt)]
         elif self.is_rosetta_running:
