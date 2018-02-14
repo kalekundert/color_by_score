@@ -57,6 +57,7 @@ Displaying scores
    blue, intermediate scores white, and bad scores red.
 
    .. note::
+
       The scale is relative to the scores present in the structure, so there 
       will always be at least one residue at either end of the spectrum.  So a 
       bright red residue doesn't necessarily mean a bad score in an absolute 
